@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "myagent": {
+      "command": "python3",
+      "args": ["-m", "myagent.mcp_server"],
+      "env": {
+        "MYAGENT_DATA_DIR": "~/.local/share/myagent",
+        "MYAGENT_LOG_LEVEL": "INFO"
+      }
+    }
+  }
+}
