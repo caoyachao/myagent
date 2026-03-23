@@ -29,19 +29,27 @@ class SkillRegistry:
     # Class-level flag to track if watcher is already set up
     _watcher_initialized: bool = False
     
-    def __init__(self):
+    def __init__(self, skills_dir: Optional[Path] = None):
         self.settings = get_settings()
+        self._skills_dir = skills_dir  # Optional custom skills directory
         self._skills: Dict[str, Skill] = {}
         self._observer: Optional[Observer] = None
         self.discover_skills()
         
-        if self.settings.auto_reload_skills and not SkillRegistry._watcher_initialized:
+        # Only setup watcher for default (shared) skills
+        if skills_dir is None and self.settings.auto_reload_skills and not SkillRegistry._watcher_initialized:
             self._setup_watcher()
             SkillRegistry._watcher_initialized = True
     
+    def _get_skills_dir(self) -> Path:
+        """Get the skills directory."""
+        if self._skills_dir is not None:
+            return self._skills_dir
+        return self.settings.skills_dir
+    
     def discover_skills(self):
         """Discover all skills in the skills directory."""
-        skills_dir = self.settings.skills_dir
+        skills_dir = self._get_skills_dir()
         if not skills_dir.exists():
             return
         
@@ -121,10 +129,14 @@ class SkillRegistry:
                 if event.src_path.endswith("SKILL.md") or event.src_path.endswith("tools.py"):
                     self.registry.discover_skills()
         
+        skills_dir = self._get_skills_dir()
+        if not skills_dir.exists():
+            return
+            
         self._observer = Observer()
         self._observer.schedule(
             SkillHandler(self),
-            str(self.settings.skills_dir),
+            str(skills_dir),
             recursive=True
         )
         self._observer.start()
@@ -150,6 +162,14 @@ class SkillRegistry:
         for skill in self._skills.values():
             for tool_name in skill.list_tools():
                 tools[f"{skill.info.name}.{tool_name}"] = skill.get_tool(tool_name)
+        return tools
+    
+    def list_tools_flat(self) -> List[tuple]:
+        """List all tools as (skill_name, tool_name, callable) tuples."""
+        tools = []
+        for skill in self._skills.values():
+            for tool_name in skill.list_tools():
+                tools.append((skill.info.name, tool_name, skill.get_tool(tool_name)))
         return tools
     
     def reload(self):

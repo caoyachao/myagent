@@ -51,14 +51,16 @@ class Memory:
 class MemoryStore:
     """Hybrid memory store using SQLite for metadata and Chroma for vectors."""
     
-    def __init__(self):
+    def __init__(self, db_path: Optional[Path] = None, chroma_path: Optional[Path] = None):
         self.settings = get_settings()
+        self._custom_db_path = db_path
+        self._custom_chroma_path = chroma_path
         self._init_sqlite()
         self._init_chroma()
     
     def _init_sqlite(self):
         """Initialize SQLite database for metadata."""
-        self.db_path = self.settings.memory_db_path
+        self.db_path = self._custom_db_path or self.settings.memory_db_path
         with self._get_db() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
@@ -83,8 +85,9 @@ class MemoryStore:
     
     def _init_chroma(self):
         """Initialize ChromaDB for vector storage."""
+        chroma_path = self._custom_chroma_path or self.settings.chroma_path
         self.chroma_client = chromadb.PersistentClient(
-            path=str(self.settings.chroma_path),
+            path=str(chroma_path),
             settings=ChromaSettings(anonymized_telemetry=False)
         )
         

@@ -1,6 +1,6 @@
 [project]
 name = "myagent"
-version = "0.1.0"
+version = "2.0.0"
 description = "A local memory-enhanced agent layer for Kimi Code CLI"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-myagent = "myagent.cli:main"
+myagent = "myagent.cli_v2:main"
 
 [build-system]
 requires = ["hatchling"]
