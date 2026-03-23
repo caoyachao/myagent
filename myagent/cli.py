@@ -52,7 +52,7 @@ def init():
 @main.command()
 def serve():
     """Start the MCP server for Kimi Code CLI integration."""
-    from myagent.mcp_server_v2 import main as mcp_main
+    from myagent.mcp_server import main as mcp_main
     
     agent_manager = get_agent_manager()
     current_agent = agent_manager.get_current_agent()
@@ -71,7 +71,7 @@ def serve():
   \"mcpServers\": {{
     \"myagent\": {{
       \"command\": \"python\",
-      \"args\": [\"-m\", \"myagent.mcp_server_v2\"],
+      \"args\": [\"-m\", \"myagent.mcp_server\"],
       \"env\": {{
         \"MYAGENT_DATA_DIR\": \"{settings.data_dir}\"
       }}

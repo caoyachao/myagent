@@ -48,7 +48,7 @@ Add to `~/.kimi/mcp.json`:
   "mcpServers": {
     "myagent": {
       "command": "python",
-      "args": ["-m", "myagent.mcp_server_v2"],
+      "args": ["-m", "myagent.mcp_server"],
       "env": {
         "MYAGENT_DATA_DIR": "~/.local/share/myagent"
       }
