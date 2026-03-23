@@ -26,7 +26,7 @@ dev = [
 ]
 
 [project.scripts]
-myagent = "myagent.cli_v2:main"
+myagent = "myagent.cli:main"
 
 [build-system]
 requires = ["hatchling"]
