@@ -2,7 +2,8 @@
 
 from typing import List, Optional
 
-from myagent.memory.store import MemoryStore, get_memory_store
+from myagent.agent.manager import get_agent_manager
+from myagent.memory.agent_store import AgentAwareMemoryStore
 from myagent.skills.registry import SkillRegistry
 
 
@@ -10,7 +11,8 @@ class PromptAssembler:
     """Assemble system prompts with memory, skills, and tools context."""
     
     def __init__(self):
-        self.memory_store = get_memory_store()
+        self.agent_manager = get_agent_manager()
+        self.memory_store = AgentAwareMemoryStore(self.agent_manager)
         self.skill_registry = SkillRegistry()
     
     def assemble_system_prompt(self, user_context: str = "") -> str:
@@ -101,7 +103,7 @@ class PromptAssembler:
         if not skills:
             return "【可用技能】\n暂无已加载的技能。"
         
-        lines = [f"【可用技能】({len(skills)} 个)"]
+        lines = [f"【可用技能】(\u200b{len(skills)} 个)"]
         for skill in skills:
             lines.append(f"• {skill.name}: {skill.description}")
         
@@ -114,7 +116,7 @@ class PromptAssembler:
         registry = get_tool_registry()
         tools = registry.list_all()
         
-        lines = [f"【可用工具】({len(tools)} 个)"]
+        lines = [f"【可用工具】(\u200b{len(tools)} 个)"]
         lines.append("你可以使用以下工具来完成任务（自动选择）：")
         
         for tool in tools:

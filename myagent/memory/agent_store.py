@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -11,23 +12,64 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 
 from myagent.agent.manager import AgentManager, get_agent_manager
-from myagent.memory.store import Memory, MemoryStore
+from myagent.memory.store import Memory
+
+
+# Thread-local storage for agent-specific context
+_thread_local = threading.local()
 
 
 class AgentAwareMemoryStore:
-    """Memory store that respects agent boundaries and inheritance settings."""
+    """Memory store that respects agent boundaries and inheritance settings.
+    
+    This class is thread-safe. Each thread can have its own agent context,
+    and concurrent access to shared resources is protected by locks.
+    """
     
     def __init__(self, agent_manager: Optional[AgentManager] = None):
         self.agent_manager = agent_manager or get_agent_manager()
-        self._current_agent = self.agent_manager.get_current_agent()
+        self._lock = threading.RLock()
+        
+        # Storage resources per agent (cached)
+        self._storage_cache: Dict[str, Dict[str, Any]] = {}
+        self._cache_lock = threading.RLock()
         
         # Initialize storage for current agent
-        self._init_storage()
+        self._refresh_agent()
+    
+    def _get_current_agent(self):
+        """Get current agent, either from thread-local or global manager."""
+        # Check if thread has its own agent context
+        if hasattr(_thread_local, 'agent_id'):
+            agent = self.agent_manager.get_agent(_thread_local.agent_id)
+            if agent:
+                return agent
+        
+        # Fall back to global current agent
+        return self.agent_manager.get_current_agent()
+    
+    def _refresh_agent(self):
+        """Refresh current agent context."""
+        with self._lock:
+            self._current_agent = self._get_current_agent()
+            self._init_storage()
     
     def _init_storage(self):
         """Initialize SQLite and ChromaDB for current agent."""
         agent = self._current_agent
+        agent_id = agent.id
         
+        # Check cache first
+        with self._cache_lock:
+            if agent_id in self._storage_cache:
+                cache = self._storage_cache[agent_id]
+                self.db_path = cache['db_path']
+                self.chroma_path = cache['chroma_path']
+                self.chroma_client = cache['chroma_client']
+                self.collection = cache['collection']
+                return
+        
+        # Initialize new storage
         # SQLite path
         self.db_path = agent.memory_db_path
         if self.db_path:
@@ -39,6 +81,15 @@ class AgentAwareMemoryStore:
         if self.chroma_path:
             self.chroma_path.mkdir(parents=True, exist_ok=True)
             self._init_chroma()
+        
+        # Cache storage resources
+        with self._cache_lock:
+            self._storage_cache[agent_id] = {
+                'db_path': self.db_path,
+                'chroma_path': self.chroma_path,
+                'chroma_client': getattr(self, 'chroma_client', None),
+                'collection': getattr(self, 'collection', None),
+            }
     
     def _init_sqlite(self):
         """Initialize SQLite database."""
@@ -108,6 +159,13 @@ class AgentAwareMemoryStore:
         Args:
             share_with_master: If True, also save to master agent's memory
         """
+        with self._lock:
+            return self._add_unsafe(content, memory_type, source, tags, metadata, share_with_master)
+    
+    def _add_unsafe(self, content: str, memory_type: str, source: str,
+                    tags: Optional[List[str]], metadata: Optional[Dict],
+                    share_with_master: bool) -> str:
+        """Add memory without acquiring lock (internal use only)."""
         memory_id = self._generate_id(content)
         now = datetime.now()
         
@@ -151,15 +209,41 @@ class AgentAwareMemoryStore:
             return
         
         # Create a temporary store for master
-        # This is a simplified version - in production might want a more efficient approach
-        master_store = MemoryStore(
-            db_path=master.memory_db_path,
-            chroma_path=master.chroma_path
-        )
-        master_store.add(content, memory_type, f"{source} (from {self._current_agent.name})", tags, metadata)
+        # Note: This creates a new store instance to avoid lock contention
+        master_store = AgentAwareMemoryStore(self.agent_manager)
+        # Temporarily switch to master context
+        with master_store._agent_context(master.id):
+            master_store._add_unsafe(
+                content, 
+                memory_type, 
+                f"{source} (from {self._current_agent.name})", 
+                tags, 
+                metadata,
+                False  # Don't recursively share
+            )
+    
+    @contextmanager
+    def _agent_context(self, agent_id: str):
+        """Temporarily switch to a different agent context."""
+        previous_agent_id = getattr(_thread_local, 'agent_id', None)
+        _thread_local.agent_id = agent_id
+        try:
+            self._refresh_agent()
+            yield
+        finally:
+            if previous_agent_id is None:
+                delattr(_thread_local, 'agent_id')
+            else:
+                _thread_local.agent_id = previous_agent_id
+            self._refresh_agent()
     
     def get(self, memory_id: str) -> Optional[Memory]:
-        """Get a memory by ID from current agent."""
+        """Get a memory by ID from current agent (thread-safe)."""
+        with self._lock:
+            return self._get_unsafe(memory_id)
+    
+    def _get_unsafe(self, memory_id: str) -> Optional[Memory]:
+        """Get memory without acquiring lock (internal use only)."""
         with self._get_db() as conn:
             row = conn.execute(
                 "SELECT * FROM memories WHERE id = ? AND agent_id = ?",
@@ -175,11 +259,18 @@ class AgentAwareMemoryStore:
                memory_type: Optional[str] = None,
                include_master: bool = None) -> List[Memory]:
         """
-        Search memories by semantic similarity.
+        Search memories by semantic similarity (thread-safe).
         
         Args:
             include_master: If None, use agent's default setting
         """
+        with self._lock:
+            return self._search_unsafe(query, top_k, memory_type, include_master)
+    
+    def _search_unsafe(self, query: str, top_k: int,
+                       memory_type: Optional[str],
+                       include_master: Optional[bool]) -> List[Memory]:
+        """Search memories without acquiring lock (internal use only)."""
         if include_master is None:
             include_master = self._current_agent.inherit_master_memories
         
@@ -213,7 +304,7 @@ class AgentAwareMemoryStore:
         
         # Update access stats
         for mem in unique_results:
-            self.update_access(mem.id)
+            self._update_access_unsafe(mem.id)
         
         return unique_results
     
@@ -279,7 +370,12 @@ class AgentAwareMemoryStore:
             return []
     
     def list_recent(self, limit: int = 20, memory_type: Optional[str] = None) -> List[Memory]:
-        """List recent memories for current agent."""
+        """List recent memories for current agent (thread-safe)."""
+        with self._lock:
+            return self._list_recent_unsafe(limit, memory_type)
+    
+    def _list_recent_unsafe(self, limit: int, memory_type: Optional[str]) -> List[Memory]:
+        """List recent memories without acquiring lock (internal use only)."""
         query = "SELECT * FROM memories WHERE agent_id = ?"
         params = [self._current_agent.id]
         
@@ -295,7 +391,12 @@ class AgentAwareMemoryStore:
             return [self._row_to_memory(row) for row in rows]
     
     def delete(self, memory_id: str) -> bool:
-        """Delete a memory from current agent."""
+        """Delete a memory from current agent (thread-safe)."""
+        with self._lock:
+            return self._delete_unsafe(memory_id)
+    
+    def _delete_unsafe(self, memory_id: str) -> bool:
+        """Delete memory without acquiring lock (internal use only)."""
         with self._get_db() as conn:
             cursor = conn.execute(
                 "DELETE FROM memories WHERE id = ? AND agent_id = ?",
@@ -313,7 +414,12 @@ class AgentAwareMemoryStore:
         return deleted
     
     def update_access(self, memory_id: str):
-        """Update access count and timestamp."""
+        """Update access count and timestamp (thread-safe)."""
+        with self._lock:
+            self._update_access_unsafe(memory_id)
+    
+    def _update_access_unsafe(self, memory_id: str):
+        """Update access without acquiring lock (internal use only)."""
         now = datetime.now()
         with self._get_db() as conn:
             conn.execute(
@@ -325,7 +431,12 @@ class AgentAwareMemoryStore:
             conn.commit()
     
     def get_stats(self) -> Dict[str, Any]:
-        """Get memory statistics for current agent."""
+        """Get memory statistics for current agent (thread-safe)."""
+        with self._lock:
+            return self._get_stats_unsafe()
+    
+    def _get_stats_unsafe(self) -> Dict[str, Any]:
+        """Get stats without acquiring lock (internal use only)."""
         with self._get_db() as conn:
             total = conn.execute(
                 "SELECT COUNT(*) FROM memories WHERE agent_id = ?",
@@ -350,6 +461,13 @@ class AgentAwareMemoryStore:
     
     def _row_to_memory(self, row: sqlite3.Row) -> Memory:
         """Convert SQLite row to Memory object."""
+        # sqlite3.Row supports dict-like access but not .get()
+        def get_col(row, col, default=None):
+            try:
+                return row[col]
+            except (KeyError, IndexError):
+                return default
+        
         return Memory(
             id=row["id"],
             content=row["content"],
@@ -360,10 +478,16 @@ class AgentAwareMemoryStore:
             access_count=row["access_count"],
             last_accessed=datetime.fromisoformat(row["last_accessed"]) if row["last_accessed"] else None,
             tags=json.loads(row["tags"] or "[]"),
-            metadata=json.loads(row["metadata"] or "{}")
+            metadata=json.loads(row["metadata"] or "{}"),
+            agent_id=get_col(row, "agent_id")
         )
     
     def refresh_agent(self):
         """Refresh current agent (call after switching)."""
-        self._current_agent = self.agent_manager.get_current_agent()
-        self._init_storage()
+        with self._lock:
+            self._refresh_agent()
+    
+    def clear_cache(self):
+        """Clear storage cache (useful for testing or memory management)."""
+        with self._cache_lock:
+            self._storage_cache.clear()

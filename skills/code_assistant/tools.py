@@ -1,7 +1,14 @@
 """Tools for code assistant skill."""
 
-from myagent.memory.store import MemoryStore, get_memory_store
+from myagent.agent.manager import get_agent_manager
+from myagent.memory.agent_store import AgentAwareMemoryStore
 from myagent.skills.registry import tool
+
+
+def _get_memory_store() -> AgentAwareMemoryStore:
+    """Get the current agent's memory store."""
+    agent_manager = get_agent_manager()
+    return AgentAwareMemoryStore(agent_manager)
 
 
 @tool()
@@ -15,7 +22,7 @@ def save_snippet(code: str, language: str, description: str = "", tags: list = N
         description: Brief description
         tags: Optional tags
     """
-    store = get_memory_store()
+    store = _get_memory_store()
     
     content = f"[{language}] {description}\n\n{code}" if description else f"[{language}]\n{code}"
     
@@ -43,7 +50,7 @@ def search_snippets(query: str, language: str = None, top_k: int = 5) -> str:
         language: Filter by language
         top_k: Number of results
     """
-    store = get_memory_store()
+    store = _get_memory_store()
     
     # Enhance query for code search
     enhanced_query = f"code snippet {query}"
@@ -78,7 +85,7 @@ def get_best_practices(language: str, topic: str = None) -> str:
         language: Programming language
         topic: Specific topic (e.g., 'error handling', 'testing')
     """
-    store = get_memory_store()
+    store = _get_memory_store()
     
     query = f"{language} best practices"
     if topic:

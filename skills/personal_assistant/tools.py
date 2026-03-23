@@ -1,7 +1,14 @@
 """Tools for personal assistant skill."""
 
-from myagent.memory.store import MemoryStore, get_memory_store
+from myagent.agent.manager import get_agent_manager
+from myagent.memory.agent_store import AgentAwareMemoryStore
 from myagent.skills.registry import tool
+
+
+def _get_memory_store() -> AgentAwareMemoryStore:
+    """Get the current agent's memory store."""
+    agent_manager = get_agent_manager()
+    return AgentAwareMemoryStore(agent_manager)
 
 
 @tool()
@@ -14,7 +21,7 @@ def save_preference(category: str, preference: str, importance: str = "medium") 
         preference: The preference description
         importance: 'high', 'medium', or 'low'
     """
-    store = get_memory_store()
+    store = _get_memory_store()
     
     content = f"[{category}] {preference} (importance: {importance})"
     
@@ -37,7 +44,7 @@ def get_preferences(category: str = None, top_k: int = 10) -> str:
         category: Filter by category
         top_k: Maximum number of preferences
     """
-    store = get_memory_store()
+    store = _get_memory_store()
     
     memories = store.search(
         "preference" if category is None else f"preference {category}",
@@ -64,7 +71,7 @@ def remind_me(content: str, when: str = None) -> str:
         content: What to remember
         when: When to be reminded (e.g., 'next meeting', 'tomorrow')
     """
-    store = get_memory_store()
+    store = _get_memory_store()
     
     full_content = content
     if when:

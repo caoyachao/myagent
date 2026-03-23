@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
@@ -12,23 +13,32 @@ from myagent.config import get_settings
 
 # Global instance
 _agent_manager_instance: Optional['AgentManager'] = None
+_agent_manager_lock = threading.RLock()
 
 
 def get_agent_manager() -> 'AgentManager':
-    """Get or create global agent manager instance."""
+    """Get or create global agent manager instance (thread-safe)."""
     global _agent_manager_instance
     if _agent_manager_instance is None:
-        _agent_manager_instance = AgentManager()
+        with _agent_manager_lock:
+            # Double-check pattern
+            if _agent_manager_instance is None:
+                _agent_manager_instance = AgentManager()
     return _agent_manager_instance
 
 
 class AgentManager:
-    """Manages all agents: CRUD, switching, and state persistence."""
+    """Manages all agents: CRUD, switching, and state persistence.
+    
+    This class is thread-safe. All public methods acquire the internal lock
+    before modifying shared state.
+    """
     
     def __init__(self):
         self.settings = get_settings()
         self._agents: Dict[str, Agent] = {}
         self._current_agent_id: Optional[str] = None
+        self._lock = threading.RLock()
         
         # Initialize directories
         self._init_directories()
@@ -138,7 +148,12 @@ class AgentManager:
         }, indent=2))
     
     def create_agent(self, request: AgentCreateRequest) -> Agent:
-        """Create a new agent."""
+        """Create a new agent (thread-safe)."""
+        with self._lock:
+            return self._create_agent_unsafe(request)
+    
+    def _create_agent_unsafe(self, request: AgentCreateRequest) -> Agent:
+        """Create agent without acquiring lock (internal use only)."""
         import uuid
         
         agent_id = str(uuid.uuid4())[:8]
@@ -216,7 +231,12 @@ class AgentManager:
             conn.commit()
     
     def list_agents(self) -> List[AgentSummary]:
-        """List all agents with summary info."""
+        """List all agents with summary info (thread-safe)."""
+        with self._lock:
+            return self._list_agents_unsafe()
+    
+    def _list_agents_unsafe(self) -> List[AgentSummary]:
+        """List agents without acquiring lock (internal use only)."""
         summaries = []
         
         for agent in self._agents.values():
@@ -265,11 +285,17 @@ class AgentManager:
             return 0
     
     def get_agent(self, agent_id: str) -> Optional[Agent]:
-        """Get agent by ID."""
-        return self._agents.get(agent_id)
+        """Get agent by ID (thread-safe)."""
+        with self._lock:
+            return self._agents.get(agent_id)
     
     def get_current_agent(self) -> Agent:
-        """Get currently active agent."""
+        """Get currently active agent (thread-safe)."""
+        with self._lock:
+            return self._get_current_agent_unsafe()
+    
+    def _get_current_agent_unsafe(self) -> Agent:
+        """Get current agent without acquiring lock (internal use only)."""
         if self._current_agent_id is None:
             self._current_agent_id = "master"
         
@@ -284,7 +310,12 @@ class AgentManager:
         return agent
     
     def switch_agent(self, agent_id: str) -> Agent:
-        """Switch to a different agent."""
+        """Switch to a different agent (thread-safe)."""
+        with self._lock:
+            return self._switch_agent_unsafe(agent_id)
+    
+    def _switch_agent_unsafe(self, agent_id: str) -> Agent:
+        """Switch agent without acquiring lock (internal use only)."""
         if agent_id not in self._agents:
             raise ValueError(f"Agent not found: {agent_id}")
         
@@ -305,7 +336,12 @@ class AgentManager:
         return new_agent
     
     def update_agent(self, agent_id: str, request: AgentUpdateRequest) -> Agent:
-        """Update an existing agent."""
+        """Update an existing agent (thread-safe)."""
+        with self._lock:
+            return self._update_agent_unsafe(agent_id, request)
+    
+    def _update_agent_unsafe(self, agent_id: str, request: AgentUpdateRequest) -> Agent:
+        """Update agent without acquiring lock (internal use only)."""
         if agent_id not in self._agents:
             raise ValueError(f"Agent not found: {agent_id}")
         
@@ -338,7 +374,16 @@ class AgentManager:
         return agent
     
     def delete_agent(self, agent_id: str) -> bool:
-        """Delete an agent (only marks for deletion, actual cleanup done by cleaner)."""
+        """Delete an agent (thread-safe).
+        
+        Note: This only removes the agent from the registry. 
+        Actual cleanup of agent data should be done by AgentCleaner.
+        """
+        with self._lock:
+            return self._delete_agent_unsafe(agent_id)
+    
+    def _delete_agent_unsafe(self, agent_id: str) -> bool:
+        """Delete agent without acquiring lock (internal use only)."""
         if agent_id not in self._agents:
             return False
         
@@ -350,7 +395,7 @@ class AgentManager:
         
         # If currently active, switch to master first
         if self._current_agent_id == agent_id:
-            self.switch_agent("master")
+            self._switch_agent_unsafe("master")
         
         # Remove from registry
         del self._agents[agent_id]
@@ -359,23 +404,35 @@ class AgentManager:
     
     def get_agent_memory_db_path(self, agent_id: str) -> Optional[Path]:
         """Get memory database path for an agent."""
-        agent = self._agents.get(agent_id)
-        if agent:
-            return agent.memory_db_path
-        return None
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent:
+                return agent.memory_db_path
+            return None
     
     def get_agent_chroma_path(self, agent_id: str) -> Optional[Path]:
         """Get chroma path for an agent."""
-        agent = self._agents.get(agent_id)
-        if agent:
-            return agent.chroma_path
-        return None
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent:
+                return agent.chroma_path
+            return None
     
     def get_agent_skills_dir(self, agent_id: str) -> Optional[Path]:
         """Get skills directory for an agent."""
-        agent = self._agents.get(agent_id)
-        if agent:
-            if agent.is_master:
-                return self.settings.config_dir / "shared_skills"
-            return agent.skills_dir
-        return None
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            if agent:
+                if agent.is_master:
+                    return self.settings.config_dir / "shared_skills"
+                return agent.skills_dir
+            return None
+    
+    def acquire_lock(self):
+        """Acquire the internal lock for batch operations.
+        
+        Use with context manager or try-finally:
+            with agent_manager.acquire_lock():
+                # perform multiple operations
+        """
+        return self._lock
