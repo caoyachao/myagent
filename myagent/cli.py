@@ -432,5 +432,203 @@ def migrate(status, rollback):
         migration.check_and_migrate()
 
 
+# Archive commands
+@main.group()
+def archive():
+    """Memory archiving and compression management."""
+    pass
+
+
+@archive.command("status")
+def archive_status():
+    """Show memory archive status."""
+    from myagent.memory.archiver import MemoryArchiver
+    
+    agent_manager = get_agent_manager()
+    current = agent_manager.get_current_agent()
+    
+    # Get active memory stats
+    memory_store = AgentAwareMemoryStore(agent_manager)
+    active_stats = memory_store.get_stats()
+    
+    # Get archive stats
+    archiver = MemoryArchiver(
+        agent_id=current.id,
+        db_path=current.memory_db_path,
+        chroma_path=current.chroma_path
+    )
+    archive_stats = archiver.get_archive_stats()
+    
+    # Analyze distribution
+    distribution = archiver.analyze_distribution()
+    
+    console.print(Panel.fit(
+        f"[bold cyan]【{current.name}】记忆归档状态[/]\n\n"
+        f"[bold]活跃存储:[/]\n"
+        f"  🔥 热数据 (Hot): {len(distribution.hot)}\n"
+        f"  🌡️  温数据 (Warm): {len(distribution.warm)}\n"
+        f"  ❄️  冷数据 (Cold): {len(distribution.cold)}\n"
+        f"  总计: {distribution.total}\n\n"
+        f"[bold]归档存储:[/]\n"
+        f"  归档文件: {archive_stats['archive_count']}\n"
+        f"  归档记忆: {archive_stats['total_memories']}\n"
+        f"  占用空间: {archive_stats['total_size_mb']:.2f} MB",
+        title="Archive Status",
+        border_style="cyan"
+    ))
+
+
+@archive.command("analyze")
+def archive_analyze():
+    """Analyze memory distribution across tiers."""
+    from myagent.memory.archiver import MemoryArchiver
+    
+    agent_manager = get_agent_manager()
+    current = agent_manager.get_current_agent()
+    
+    archiver = MemoryArchiver(
+        agent_id=current.id,
+        db_path=current.memory_db_path,
+        chroma_path=current.chroma_path
+    )
+    
+    with console.status("[bold green]Analyzing memories..."):
+        distribution = archiver.analyze_distribution()
+    
+    # Show hot memories
+    if distribution.hot:
+        console.print(f"\n[bold yellow]🔥 Hot Memories ({len(distribution.hot)}):[/]")
+        for mem in distribution.hot[:5]:
+            console.print(f"  • [{mem.memory_type}] {mem.content[:60]}...")
+        if len(distribution.hot) > 5:
+            console.print(f"  ... and {len(distribution.hot) - 5} more")
+    
+    # Show warm memories
+    if distribution.warm:
+        console.print(f"\n[bold blue]🌡️  Warm Memories ({len(distribution.warm)}):[/]")
+        for mem in distribution.warm[:3]:
+            console.print(f"  • [{mem.memory_type}] {mem.content[:60]}...")
+        if len(distribution.warm) > 3:
+            console.print(f"  ... and {len(distribution.warm) - 3} more")
+    
+    # Show cold memories
+    if distribution.cold:
+        console.print(f"\n[bold white]❄️  Cold Memories ({len(distribution.cold)}):[/]")
+        console.print(f"  {len(distribution.cold)} memories ready for archiving")
+
+
+@archive.command("run")
+@click.option("--dry-run", is_flag=True, help="Simulate without making changes")
+@click.option("--strategy", type=click.Choice(["summary", "merge", "dedup"]),
+              help="Override compression strategy")
+def archive_run(dry_run, strategy):
+    """Run archiving maintenance."""
+    from myagent.memory.archiver import MemoryArchiver
+    from myagent.config import get_settings
+    
+    agent_manager = get_agent_manager()
+    current = agent_manager.get_current_agent()
+    
+    if dry_run:
+        console.print("[yellow]Dry run mode - no changes will be made[/]\n")
+    
+    # Override strategy if provided
+    if strategy:
+        settings = get_settings()
+        original_strategy = settings.archive.compression_strategy
+        settings.archive.compression_strategy = strategy
+        console.print(f"[dim]Using strategy: {strategy}[/]")
+    
+    archiver = MemoryArchiver(
+        agent_id=current.id,
+        db_path=current.memory_db_path,
+        chroma_path=current.chroma_path
+    )
+    
+    with console.status("[bold green]Running maintenance..."):
+        stats = archiver.run_maintenance()
+    
+    # Display results
+    console.print(Panel.fit(
+        f"[bold green]✅ Archive Maintenance Complete[/]\n\n"
+        f"[bold]Distribution:[/]\n"
+        f"  🔥 Hot: {stats['analysis']['hot']}\n"
+        f"  🌡️  Warm: {stats['analysis']['warm']}\n"
+        f"  ❄️  Cold: {stats['analysis']['cold']}\n\n"
+        + (f"[bold]Compression:[/]\n"
+           f"  Original: {stats['compression']['original_count']}\n"
+           f"  Compressed: {stats['compression']['compressed_count']}\n"
+           f"  Ratio: {stats['compression']['ratio']}\n"
+           f"  Strategy: {stats['compression']['strategy']}\n\n"
+           if stats['compression'] else "")
+        + f"[bold]Cleanup:[/]\n"
+        f"  Deleted from active: {stats['cleanup'].get('deleted_from_active', 0)}\n"
+        f"  Archive files: {stats['archive_stats']['archive_count']}",
+        title="Archive Results",
+        border_style="green"
+    ))
+
+
+@archive.command("search")
+@click.argument("query")
+@click.option("-n", "top_k", default=5, help="Number of results")
+def archive_search(query, top_k):
+    """Search archived memories."""
+    from myagent.memory.archiver import MemoryArchiver
+    
+    agent_manager = get_agent_manager()
+    current = agent_manager.get_current_agent()
+    
+    archiver = MemoryArchiver(
+        agent_id=current.id,
+        db_path=current.memory_db_path,
+        chroma_path=current.chroma_path
+    )
+    
+    with console.status("[bold blue]Searching archives..."):
+        results = archiver.search_archive(query, top_k=top_k)
+    
+    if not results:
+        console.print("[yellow]No archived memories found.[/]")
+        return
+    
+    console.print(f"[bold]Found {len(results)} archived memories:[/]\n")
+    for i, mem in enumerate(results, 1):
+        date_str = mem.created_at.strftime("%Y-%m-%d")
+        console.print(f"{i}. [{date_str}] [{mem.memory_type}]")
+        console.print(f"   {mem.content[:100]}...")
+        if mem.metadata.get("compressed_from"):
+            console.print(f"   [dim](compressed from {len(mem.metadata['compressed_from'])} memories)[/]")
+        console.print()
+
+
+@archive.command("config")
+def archive_config():
+    """Show archive configuration."""
+    from myagent.config import get_settings
+    
+    config = get_settings().archive
+    
+    console.print(Panel.fit(
+        f"[bold]Tier Thresholds:[/]\n"
+        f"  Hot days: {config.hot_days}\n"
+        f"  Warm days: {config.warm_days}\n\n"
+        f"[bold]Activity Thresholds:[/]\n"
+        f"  Hot activity: {config.hot_activity_threshold}\n"
+        f"  Warm activity: {config.warm_activity_threshold}\n\n"
+        f"[bold]Capacity Limits:[/]\n"
+        f"  Max hot memories: {config.max_hot_memories}\n"
+        f"  Max warm memories: {config.max_warm_memories}\n\n"
+        f"[bold]Compression:[/]\n"
+        f"  Strategy: {config.compression_strategy}\n"
+        f"  Level: {config.compression_level}\n\n"
+        f"[bold]Auto Archive:[/]\n"
+        f"  Enabled: {'Yes' if config.auto_archive_enabled else 'No'}\n"
+        f"  Interval: {config.auto_archive_interval_hours} hours",
+        title="Archive Configuration",
+        border_style="blue"
+    ))
+
+
 if __name__ == "__main__":
     main()

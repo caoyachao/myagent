@@ -1,11 +1,45 @@
 """Configuration management for MyAgent."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Literal
 
 from platformdirs import user_data_dir, user_config_dir
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ArchiveConfig(BaseSettings):
+    """Memory archiving configuration."""
+    
+    # Tier thresholds (days)
+    hot_days: int = 30          # Active memory days
+    warm_days: int = 90         # Warm memory days
+    
+    # Activity score thresholds (0-1 scale)
+    hot_activity_threshold: float = 0.5      # Minimum activity score for hot tier
+    warm_activity_threshold: float = 0.2     # Minimum activity score for warm tier
+    
+    # Capacity thresholds
+    max_hot_memories: int = 1000       # Max active memories
+    max_warm_memories: int = 5000      # Max warm memories
+    
+    # Compression strategy
+    compression_strategy: Literal["summary", "merge", "dedup"] = "summary"
+    
+    # Auto archiving
+    auto_archive_enabled: bool = True
+    auto_archive_interval_hours: int = 24
+    
+    # Archive storage
+    archive_format: Literal["jsonl", "sqlite"] = "jsonl"
+    compression_level: int = 6  # gzip compression level
+    
+    @field_validator('compression_level')
+    @classmethod
+    def validate_compression_level(cls, v: int) -> int:
+        if not 1 <= v <= 9:
+            return 6
+        return v
 
 
 class Settings(BaseSettings):
@@ -39,6 +73,9 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     
+    # Archive settings (nested)
+    archive: ArchiveConfig = Field(default_factory=ArchiveConfig)
+    
     def model_post_init(self, __context):
         """Initialize derived paths."""
         if self.memory_db_path is None:
@@ -52,6 +89,12 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.skills_dir.mkdir(parents=True, exist_ok=True)
+    
+    def get_archive_dir(self, agent_id: str) -> Path:
+        """Get archive directory for an agent."""
+        archive_dir = self.data_dir / "agents" / f"agent-{agent_id}" / "archives"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        return archive_dir
 
 
 # Global settings instance
