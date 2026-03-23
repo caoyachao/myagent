@@ -17,12 +17,20 @@ from myagent.tools.memory_tools_v2 import MemoryToolsV2
 
 
 class AgentAwareMCPServer:
-    """MCP Server with multi-agent support."""
+    """MCP Server with multi-agent support.
+    
+    Each MCP session starts with 'master' agent by default.
+    Agent switching is session-level only and does not persist across sessions.
+    This enables multiple windows to run different agents simultaneously.
+    """
     
     def __init__(self):
         self.settings = get_settings()
         self.server = Server(self.settings.mcp_server_name)
         self.agent_manager = get_agent_manager()
+        
+        # Session-level current agent (always start with master)
+        self.session_agent_id = "master"
         
         # Initialize current agent's stores
         self._refresh_agent_context()
@@ -31,8 +39,15 @@ class AgentAwareMCPServer:
         self._setup_handlers()
     
     def _refresh_agent_context(self):
-        """Refresh context for current agent."""
-        self.current_agent = self.agent_manager.get_current_agent()
+        """Refresh context for current agent (session-level)."""
+        # Use session-level agent ID instead of global current agent
+        agent = self.agent_manager.get_agent(self.session_agent_id)
+        if agent is None:
+            # Fallback to master if session agent not found
+            agent = self.agent_manager.get_agent("master")
+            self.session_agent_id = "master"
+        
+        self.current_agent = agent
         self.memory_store = AgentAwareMemoryStore(self.agent_manager)
         self.skill_registry = AgentAwareSkillRegistry(self.current_agent, self.agent_manager)
         
@@ -295,19 +310,17 @@ class AgentAwareMCPServer:
         elif name == "get_memory_stats":
             return self.memory_tools.get_stats()
         
-        # Agent management tools
+        # Agent management tools (session-level)
         elif name == "list_agents":
-            return self.agent_tools.list_agents()
+            return self._list_agents_session()
         elif name == "switch_agent":
-            result = self.agent_tools.switch_agent(**arguments)
-            self._refresh_agent_context()  # Refresh after switch
-            return result
+            return self._switch_agent_session(**arguments)
         elif name == "create_agent":
             return self.agent_tools.create_agent(**arguments)
         elif name == "delete_agent":
             return self.agent_tools.delete_agent(**arguments)
         elif name == "get_current_agent_info":
-            return self.agent_tools.get_current_info()
+            return self._get_current_info_session()
         
         # Skill management tools
         elif name == "list_skills":
@@ -320,6 +333,109 @@ class AgentAwareMCPServer:
         
         else:
             raise ValueError(f"Unknown tool: {name}")
+    
+    def _list_agents_session(self) -> str:
+        """List all agents with session-level current marker."""
+        agents = self.agent_manager.list_agents()
+        
+        if not agents:
+            return "No agents found."
+        
+        lines = [f"Available agents ({len(agents)}):\n"]
+        
+        for agent_summary in agents:
+            # Mark session agent as current
+            is_session_current = (agent_summary.id == self.session_agent_id)
+            active_marker = " ★当前会话" if is_session_current else ""
+            master_marker = " [主智能体]" if agent_summary.is_master else ""
+            
+            lines.append(f"• {agent_summary.name}{master_marker}{active_marker}")
+            lines.append(f"  ID: {agent_summary.id}")
+            lines.append(f"  Description: {agent_summary.description}")
+            lines.append(f"  Memories: {agent_summary.memory_count} | Skills: {agent_summary.skill_count}")
+            lines.append("")
+        
+        lines.append("Use switch_agent(agent_id) to switch to a different agent (session only).")
+        
+        return "\n".join(lines)
+    
+    def _switch_agent_session(self, agent_id: str) -> str:
+        """Switch to a different agent (session-level only)."""
+        # Check if agent exists
+        agent = self.agent_manager.get_agent(agent_id)
+        if not agent:
+            return f"Agent '{agent_id}' not found. Use list_agents() to see available agents."
+        
+        # Check if already active in this session
+        if self.session_agent_id == agent_id:
+            return f"Already using agent '{agent.name}' in this session."
+        
+        # Perform session-level switch (no persistence)
+        self.session_agent_id = agent_id
+        self._refresh_agent_context()
+        
+        return f"""【{agent.name}】Switched to agent '{agent.name}' (current session only).
+
+人格：{agent.personality or '无'}
+描述：{agent.description or '无'}
+
+继承设置：
+- 共享技能：{'是' if agent.inherit_shared_skills else '否'}
+- 共享工具：{'是' if agent.inherit_shared_tools else '否'}
+- 主智能体记忆：{'是' if agent.inherit_master_memories else '否'}
+
+提示：此切换仅对当前会话有效。新窗口启动时仍将使用 master 智能体。
+"""
+    
+    def _get_current_info_session(self) -> str:
+        """Get information about current agent (session-level)."""
+        agent = self.agent_manager.get_agent(self.session_agent_id)
+        if not agent:
+            return "Error: Current agent not found."
+        
+        # Get memory stats
+        memory_count = 0
+        if agent.memory_db_path and agent.memory_db_path.exists():
+            import sqlite3
+            try:
+                with sqlite3.connect(agent.memory_db_path) as conn:
+                    cursor = conn.execute("SELECT COUNT(*) FROM memories")
+                    memory_count = cursor.fetchone()[0]
+            except Exception:
+                pass
+        
+        # Get skill count
+        skill_count = 0
+        if agent.skills_dir and agent.skills_dir.exists():
+            skill_count = len([d for d in agent.skills_dir.iterdir() if d.is_dir()])
+        
+        lines = [
+            f"Current Agent (Session): {agent.name}",
+            f"ID: {agent.id}",
+            f"Description: {agent.description or 'None'}",
+        ]
+        
+        if agent.personality:
+            lines.append(f"Personality: {agent.personality}")
+        
+        lines.extend([
+            f"",
+            f"Statistics:",
+            f"- Memories: {memory_count}",
+            f"- Private skills: {skill_count}",
+            f"",
+            f"Inheritance:",
+            f"- Shared skills: {'Yes' if agent.inherit_shared_skills else 'No'}",
+            f"- Shared tools: {'Yes' if agent.inherit_shared_tools else 'No'}",
+            f"- Master memories: {'Yes' if agent.inherit_master_memories else 'No'}",
+            f"",
+            f"Note: This is the session-level current agent. New sessions start with 'master'.",
+        ])
+        
+        if agent.is_master:
+            lines.append(f"\nThis is the master agent.")
+        
+        return "\n".join(lines)
     
     def _list_skills(self, include_private: bool = True) -> str:
         """List available skills."""
