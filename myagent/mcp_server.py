@@ -381,6 +381,8 @@ class AgentAwareMCPServer:
     
     def _list_agents_session(self) -> str:
         """List all agents with session-level current marker."""
+        # 刷新智能体列表，确保看到其他会话创建的agent
+        self.agent_manager._load_all_agents()
         agents = self.agent_manager.list_agents()
         
         if not agents:
