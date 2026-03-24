@@ -248,6 +248,45 @@ class AgentAwareMCPServer:
                 }
             ),
             Tool(
+                name="create_agent_from",
+                description="Create a new agent by copying from an existing agent, including all memories, skills, and personality",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "source_agent_id": {"type": "string", "description": "ID of the agent to copy from"},
+                        "new_name": {"type": "string", "description": "Name for the new agent"},
+                        "new_description": {"type": "string", "description": "Optional new description (defaults to source's description)"},
+                        "copy_memories": {"type": "boolean", "default": True, "description": "Whether to copy all memories"},
+                        "copy_skills": {"type": "boolean", "default": True, "description": "Whether to copy all private skills"},
+                        "copy_personality": {"type": "boolean", "default": True, "description": "Whether to copy personality and system prompt"}
+                    },
+                    "required": ["source_agent_id", "new_name"]
+                }
+            ),
+            Tool(
+                name="show_agent_info",
+                description="Show detailed information about a specific agent including memories, skills, and settings",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {"type": "string", "description": "ID of the agent to show info for"}
+                    },
+                    "required": ["agent_id"]
+                }
+            ),
+            Tool(
+                name="rename_agent",
+                description="Rename an agent without losing any memories, skills, or tools",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "agent_id": {"type": "string", "description": "ID of the agent to rename"},
+                        "new_name": {"type": "string", "description": "New name for the agent"}
+                    },
+                    "required": ["agent_id", "new_name"]
+                }
+            ),
+            Tool(
                 name="delete_agent",
                 description="Delete an agent (cannot delete master agent)",
                 inputSchema={
@@ -317,6 +356,12 @@ class AgentAwareMCPServer:
             return self._switch_agent_session(**arguments)
         elif name == "create_agent":
             return self.agent_tools.create_agent(**arguments)
+        elif name == "create_agent_from":
+            return self.agent_tools.create_agent_from(**arguments)
+        elif name == "show_agent_info":
+            return self.agent_tools.show_agent_info(**arguments)
+        elif name == "rename_agent":
+            return self.agent_tools.rename_agent(**arguments)
         elif name == "delete_agent":
             return self.agent_tools.delete_agent(**arguments)
         elif name == "get_current_agent_info":
