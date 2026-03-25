@@ -1,6 +1,6 @@
 # MyAgent 2.0
 
-A **multi-agent**, memory-enhanced layer for **Kimi Code CLI**.
+A **multi-agent**, memory-enhanced layer for **CLI**.
 
 ## What's New in 2.0
 
