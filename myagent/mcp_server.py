@@ -48,7 +48,8 @@ class AgentAwareMCPServer:
             self.session_agent_id = "master"
         
         self.current_agent = agent
-        self.memory_store = AgentAwareMemoryStore(self.agent_manager)
+        # Pass explicit agent_id to ensure memory is stored in the correct agent's database
+        self.memory_store = AgentAwareMemoryStore(self.agent_manager, agent_id=self.session_agent_id)
         self.skill_registry = AgentAwareSkillRegistry(self.current_agent, self.agent_manager)
         
         # Initialize tool handlers

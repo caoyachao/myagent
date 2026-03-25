@@ -26,8 +26,9 @@ class AgentAwareMemoryStore:
     and concurrent access to shared resources is protected by locks.
     """
     
-    def __init__(self, agent_manager: Optional[AgentManager] = None):
+    def __init__(self, agent_manager: Optional[AgentManager] = None, agent_id: Optional[str] = None):
         self.agent_manager = agent_manager or get_agent_manager()
+        self._explicit_agent_id = agent_id  # Explicitly specified agent ID
         self._lock = threading.RLock()
         
         # Storage resources per agent (cached)
@@ -38,14 +39,20 @@ class AgentAwareMemoryStore:
         self._refresh_agent()
     
     def _get_current_agent(self):
-        """Get current agent, either from thread-local or global manager."""
-        # Check if thread has its own agent context
+        """Get current agent, either from explicit setting, thread-local or global manager."""
+        # Priority 1: Explicitly specified agent ID
+        if self._explicit_agent_id:
+            agent = self.agent_manager.get_agent(self._explicit_agent_id)
+            if agent:
+                return agent
+        
+        # Priority 2: Check if thread has its own agent context
         if hasattr(_thread_local, 'agent_id'):
             agent = self.agent_manager.get_agent(_thread_local.agent_id)
             if agent:
                 return agent
         
-        # Fall back to global current agent
+        # Priority 3: Fall back to global current agent
         return self.agent_manager.get_current_agent()
     
     def _refresh_agent(self):
