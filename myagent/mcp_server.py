@@ -493,23 +493,32 @@ class AgentAwareMCPServer:
             return "No skills available."
         
         lines = [f"Available skills ({len(skills)}):"]
+        lines.append("(Priority: Project > Private > Shared)\n")
+        
         for skill in skills:
-            private_marker = " [私有]" if self._is_private_skill(skill.name) else ""
-            lines.append(f"\n• {skill.name}{private_marker}")
+            origin = self.skill_registry.get_skill_origin(skill.name)
+            origin_marker = {
+                'project': ' [📁项目]',
+                'private': ' [🔒私有]',
+                'shared': ' [🌐共享]'
+            }.get(origin, '')
+            
+            lines.append(f"• {skill.name}{origin_marker}")
             lines.append(f"  {skill.description}")
             if skill.tools:
                 lines.append(f"  Tools: {', '.join(skill.tools)}")
+            lines.append("")
         
         return "\n".join(lines)
     
-    def _is_private_skill(self, skill_name: str) -> bool:
-        """Check if a skill is private to current agent."""
-        if not self.skill_registry.has_private_skills():
-            return False
-        private = self.skill_registry.get_private_registry()
-        if private:
-            return private.get(skill_name) is not None
-        return False
+    def _get_skill_origin_marker(self, skill_name: str) -> str:
+        """Get origin marker for a skill."""
+        origin = self.skill_registry.get_skill_origin(skill_name)
+        return {
+            'project': '📁项目',
+            'private': '🔒私有', 
+            'shared': '🌐共享'
+        }.get(origin, '❓未知')
     
     def _get_skill_info(self, skill_name: str) -> str:
         """Get detailed info about a skill."""
