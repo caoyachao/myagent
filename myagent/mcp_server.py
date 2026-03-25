@@ -171,14 +171,14 @@ class AgentAwareMCPServer:
             ),
             Tool(
                 name="save_memory",
-                description="Save important information to long-term memory",
+                description="Save important information to current agent's memory. IMPORTANT: By default, memories are ONLY saved to the current agent and will NOT be shared with master. Use share_with_master=true only when explicitly requested by user.",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "content": {"type": "string", "description": "The information to save"},
-                        "memory_type": {"type": "string", "default": "fact", "description": "Type of memory"},
+                        "memory_type": {"type": "string", "default": "fact", "description": "Type of memory: fact, preference, event, insight, code, secret"},
                         "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags for categorization"},
-                        "share_with_master": {"type": "boolean", "default": False, "description": "Also save to master agent"}
+                        "share_with_master": {"type": "boolean", "default": False, "description": "EXPLICIT ONLY: Also save to master agent. Default is false - memories stay in current agent only."}
                     },
                     "required": ["content"]
                 }
@@ -575,13 +575,29 @@ class AgentAwareMCPServer:
     
     def _get_base_prompt(self) -> str:
         """Get base system prompt."""
-        return """【基础指令】
-你是一个有长期记忆的 AI 助手。你可以访问用户的历史记忆、已学习的技能和可用工具。
+        agent_name = self.current_agent.name
+        is_master = self.current_agent.is_master
+        
+        memory_storage_rules = """
+【记忆存储安全规则】⚠️ 重要
+1. 默认只保存到当前智能体：save_memory 默认只保存到当前智能体的记忆库
+2. 不自动共享到master：除非用户明确要求，否则绝不使用 share_with_master=true
+3. 隔离原则：每个智能体的记忆是独立的，不应自动污染master的记忆库
+4. 查询可跨智能体：recall_memory 默认可以查询当前智能体 + master 的记忆（只读）
+""" if not is_master else """
+【记忆存储规则】
+当前是Master智能体，保存的记忆可以作为共享知识被其他智能体查询。
+"""
+        
+        return f"""【基础指令】
+你是一个有长期记忆的 AI 助手（当前身份：{agent_name}）。
+
+{memory_storage_rules}
 
 重要原则：
-1. 主动检索相关记忆来提供个性化回复
+1. 主动检索相关记忆来提供个性化回复（recall_memory 可同时查自己和master）
 2. 当用户提到过去的事情时，使用 recall_memory 工具检索
-3. 重要的信息（如偏好、习惯、重要事实）使用 save_memory 保存
+3. 重要信息使用 save_memory 保存（默认只保存到当前智能体，不共享）
 4. 利用可用技能来更好地完成任务
 5. 可以使用 create_agent 创建新智能体，switch_agent 切换智能体
 
@@ -590,7 +606,12 @@ class AgentAwareMCPServer:
 - preference: 用户偏好和习惯
 - event: 特定事件和经历
 - insight: 洞察和总结
-- code: 代码片段和技术方案"""
+- code: 代码片段和技术方案
+- secret: 敏感信息如token、密码等
+
+⚠️ 安全提醒：
+- 保存敏感信息（如GitHub token）时，考虑使用 memory_type="secret"
+- 默认情况下，记忆只保存在当前智能体，不会自动同步到master"""
     
     def _get_format_instruction(self) -> str:
         """Get format instruction."""

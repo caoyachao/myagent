@@ -62,7 +62,11 @@ class MemoryToolsV2:
         tags: Optional[List[str]] = None,
         share_with_master: bool = False
     ) -> str:
-        """Save a memory."""
+        """Save a memory to current agent's memory store.
+        
+        By default, memories are ONLY saved to the current agent's database.
+        They will NOT be shared with master unless explicitly requested.
+        """
         if not content or not content.strip():
             return "Error: Content cannot be empty."
         
@@ -72,6 +76,8 @@ class MemoryToolsV2:
         elif isinstance(tags, str):
             tags = [t.strip() for t in tags.split(",")]
         
+        # SECURITY: Only save to current agent's memory by default
+        # Master memory is never modified unless explicitly requested
         memory_id = self.memory_store.add(
             content=content.strip(),
             memory_type=memory_type,
@@ -80,9 +86,12 @@ class MemoryToolsV2:
             share_with_master=share_with_master
         )
         
-        result = f"✅ Memory saved (ID: {memory_id})."
-        if share_with_master and not self.agent.is_master:
-            result += " Also shared with master agent."
+        if self.agent.is_master:
+            result = f"✅ Memory saved to master (ID: {memory_id})."
+        elif share_with_master:
+            result = f"✅ Memory saved to {self.agent.name} and shared with master (ID: {memory_id})."
+        else:
+            result = f"✅ Memory saved to {self.agent.name} only (ID: {memory_id})."
         
         return result
     
@@ -109,14 +118,27 @@ class MemoryToolsV2:
         return "\n".join(lines)
     
     def forget(self, memory_id: str) -> str:
-        """Delete a memory."""
+        """Delete a memory from current agent's memory store.
+        
+        Security: Can only delete memories from current agent's database.
+        Cannot delete master agent's memories unless current agent is master.
+        """
         if not memory_id:
             return "Error: Memory ID cannot be empty."
         
+        # Check if memory exists in current agent's store
+        memory = self.memory_store.get(memory_id)
+        if memory is None:
+            return f"Memory {memory_id} not found in {self.agent.name}'s memory store."
+        
+        # Security check: can only delete own memories
+        if memory.agent_id and memory.agent_id != self.agent.id:
+            return f"⚠️ Cannot delete: Memory {memory_id} belongs to a different agent. You can only delete memories from {self.agent.name}."
+        
         if self.memory_store.delete(memory_id):
-            return f"Memory {memory_id} deleted successfully."
+            return f"✅ Memory {memory_id} deleted from {self.agent.name}.'"
         else:
-            return f"Memory {memory_id} not found."
+            return f"Failed to delete memory {memory_id}."
     
     def get_stats(self) -> str:
         """Get memory statistics."""
