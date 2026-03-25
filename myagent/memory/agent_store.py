@@ -262,7 +262,8 @@ class AgentAwareMemoryStore:
         Search memories by semantic similarity (thread-safe).
         
         Args:
-            include_master: If None, use agent's default setting
+            include_master: If None or True, include master agent memories.
+                          Set to False to exclude master memories.
         """
         with self._lock:
             return self._search_unsafe(query, top_k, memory_type, include_master)
@@ -271,8 +272,9 @@ class AgentAwareMemoryStore:
                        memory_type: Optional[str],
                        include_master: Optional[bool]) -> List[Memory]:
         """Search memories without acquiring lock (internal use only)."""
+        # Default to True to always include master memories unless explicitly disabled
         if include_master is None:
-            include_master = self._current_agent.inherit_master_memories
+            include_master = True
         
         results = []
         

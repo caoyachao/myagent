@@ -21,7 +21,16 @@ class MemoryToolsV2:
         memory_type: Optional[str] = None,
         include_master: Optional[bool] = None
     ) -> str:
-        """Recall memories."""
+        """Recall memories.
+        
+        Args:
+            query: The search query
+            top_k: Number of results to return
+            memory_type: Filter by memory type
+            include_master: Whether to include master agent memories. 
+                          Defaults to True (always search master memories).
+                          Set to False to exclude master memories.
+        """
         if not query or not query.strip():
             return "Error: Query cannot be empty."
         
