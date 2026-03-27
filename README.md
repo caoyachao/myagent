@@ -297,7 +297,7 @@ def my_tool(param: str) -> str:
 
 ```
 ┌─────────────────┐
-│   Kimi CLI      │
+│   Your CLI      │
 └────────┬────────┘
          │ MCP
          ▼
