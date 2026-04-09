@@ -47,7 +47,7 @@ class MemoryToolsV2:
         lines = [f"Found {len(memories)} relevant memories:\n"]
         
         for i, mem in enumerate(memories, 1):
-            lines.append(f"{i}. [{mem.memory_type}] {mem.content}")
+            lines.append(f"{i}. [ID: {mem.id}] [{mem.memory_type}] {mem.content}")
             if mem.tags:
                 lines.append(f"   Tags: {', '.join(mem.tags)}")
             if mem.source:
@@ -113,7 +113,7 @@ class MemoryToolsV2:
         
         for mem in memories:
             date = mem.created_at.strftime("%Y-%m-%d %H:%M")
-            lines.append(f"• [{date}] [{mem.memory_type}] {mem.content[:80]}...")
+            lines.append(f"• [ID: {mem.id}] [{date}] [{mem.memory_type}] {mem.content[:80]}...")
         
         return "\n".join(lines)
     
