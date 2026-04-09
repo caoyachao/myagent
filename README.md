@@ -1,6 +1,12 @@
-# MyAgent 2.0
+# MyAgent 2.1.0
 
-A **multi-agent**, memory-enhanced layer for **CLI**.
+A **multi-agent**, memory-enhanced layer for **CLI** with unified **Skill Management**.
+
+## What's New in 2.1.0
+
+- **📦 Unified Skill Management**: Install skills via MCP tools or CLI with shared/private scope
+- **🌐 Cross-CLI Consistency**: Skills installed via MyAgent are available across all MCP-enabled CLIs
+- **🎯 Smart Installation**: LLM automatically uses MyAgent's install system instead of direct clawhub
 
 ## What's New in 2.0
 
@@ -15,8 +21,10 @@ A **multi-agent**, memory-enhanced layer for **CLI**.
 
 - **Long-term Memory**: Persistent storage using SQLite + ChromaDB with semantic search
 - **Skill System**: Dynamic skill loading with SKILL.md standard (shared + private)
+- **Unified Skill Management**: Install from ClawHub with `--shared` (all agents) or `--private` (current agent)
 - **Multi-Agent**: Create specialized agents for different tasks
 - **MCP Integration**: Native Model Context Protocol support for Kimi Code CLI
+- **Cross-CLI Compatible**: Skills work across Kimi, Claude, and other MCP-enabled CLIs
 - **Local-First**: All data stored locally, no external API keys needed
 
 ## Installation
@@ -116,6 +124,31 @@ myagent recall "Python 框架"
 myagent recall "项目经验" --include-master
 ```
 
+### Skill Management (New in 2.1.0)
+
+```bash
+# Install a skill from ClawHub (shared - all agents can use)
+myagent skill install think-plan --scope shared
+
+# Install a skill for current agent only (private)
+myagent skill install code-reviewer --scope private
+
+# List all installed skills
+myagent skill list
+
+# Show skill details
+myagent skill info think-plan
+
+# Search for skills on ClawHub
+myagent skill search "code review"
+
+# Update a skill to latest version
+myagent skill update think-plan
+
+# Uninstall a skill
+myagent skill uninstall think-plan
+```
+
 ### System Commands
 
 ```bash
@@ -148,8 +181,12 @@ myagent serve
 - `get_memory_stats()` - Show memory statistics
 
 **Skill Tools:**
-- `list_skills()` - List available skills
+- `install_skill(slug, scope)` - ⚠️ **PRIORITY**: Install skill from ClawHub (use this first!)
+- `uninstall_skill(skill_name)` - Uninstall a skill
+- `list_skills(scope)` - List installed skills with their scope
+- `search_skills(query)` - Search for skills on ClawHub
 - `get_skill_info(skill_name)` - Get skill details
+- `update_skill(skill_name)` - Update to latest version
 - `reload_skills()` - Reload skills from disk
 
 ### Example Conversation
@@ -175,6 +212,36 @@ Kimi：> 调用 switch_agent
 用户：我最近工作压力很大...
 
 【心理咨询师】我理解你的感受。工作压力是现代人常见的问题...
+```
+
+### Skill Management Example
+
+```
+用户：我想安装一个代码审查的 skill
+
+Kimi：> 调用 search_skills
+      query: "code review"
+
+【编程助手】找到以下代码审查相关的 Skill：
+1. code-reviewer - 专业的代码审查助手
+2. pr-assistant - PR 审查和生成工具
+
+请选择要安装的 Skill，或告诉我具体的 slug。
+
+用户：安装第一个，给当前 agent 私有使用
+
+Kimi：> 调用 install_skill
+      slug: code-reviewer
+      scope: private
+
+【编程助手】✅ Successfully installed 'code-reviewer'
+   Scope: private (仅当前 Agent 可用)
+   Location: ~/Library/.../agents/agent-xxx/skills/code-reviewer/
+
+用户：这个 skill 在其他 agent 也能用吗？
+
+【编程助手】不能，这个 skill 是私有的，只有当前 Agent (编程助手) 可以使用。
+如果你想让所有 agent 都能用，可以重新安装为 shared 范围。
 ```
 
 ## Agent Identity Display
@@ -233,7 +300,27 @@ myagent migrate --status
 myagent migrate --rollback
 ```
 
-## Creating Skills
+## Skill Management
+
+### Installing from ClawHub (Recommended)
+
+MyAgent 2.1.0 provides unified skill installation that works across all MCP-enabled CLIs:
+
+```bash
+# Install as shared skill (all agents can use)
+myagent skill install caoyachao/think-plan --scope shared
+
+# Install as private skill (only current agent)
+myagent skill install caoyachao/think-plan --scope private
+```
+
+**Why use MyAgent instead of `clawhub install` directly?**
+- ✅ Skills are linked to your Agent identity
+- ✅ Works consistently across Kimi, Claude, and other MCP CLIs
+- ✅ Easy management (list, update, uninstall)
+- ✅ Clear scope control (shared vs private)
+
+### Creating Custom Skills
 
 ### Shared Skills (All Agents)
 
@@ -296,29 +383,31 @@ def my_tool(param: str) -> str:
 ## Architecture
 
 ```
-┌─────────────────┐
-│   Your CLI      │
-└────────┬────────┘
-         │ MCP
-         ▼
-┌─────────────────────────────────────────┐
-│           MyAgent 2.0                    │
-│  ┌─────────────────────────────────┐    │
-│  │      Agent Manager              │    │
-│  │  ┌─────────┐  ┌─────────┐      │    │
-│  │  │ Agent 1 │  │ Agent 2 │ ...  │    │
-│  │  └────┬────┘  └────┬────┘      │    │
-│  └───────┼────────────┼───────────┘    │
-│          │            │                 │
-│  ┌───────▼────────────▼───────────┐    │
-│  │   AgentAwareMemoryStore         │    │
-│  │   (isolated per agent)          │    │
-│  └─────────────────────────────────┘    │
-│  ┌─────────────────────────────────┐    │
-│  │   AgentAwareSkillRegistry       │    │
-│  │   (shared + private skills)     │    │
-│  └─────────────────────────────────┘    │
-└─────────────────────────────────────────┘
+┌─────────────────┐     ┌─────────────────┐
+│   Kimi CLI      │     │  Claude Code    │
+└────────┬────────┘     └────────┬────────┘
+         │                       │
+         └───────────┬───────────┘
+                     │ MCP
+                     ▼
+        ┌────────────────────────────┐
+        │      MyAgent 2.1.0         │
+        │  ┌──────────────────────┐  │
+        │  │   Skill Manager      │  │  ← NEW in 2.1.0
+        │  │  (ClawHub install)   │  │
+        │  └──────────────────────┘  │
+        │  ┌──────────────────────┐  │
+        │  │   Agent Manager      │  │
+        │  │  ┌────┐ ┌────┐      │  │
+        │  │  │ A1 │ │ A2 │ ...  │  │
+        │  │  └──┬─┘ └──┬─┘      │  │
+        │  └─────┼──────┼────────┘  │
+        │        │      │            │
+        │  ┌─────▼──────▼────────┐   │
+        │  │ AgentAwareMemory    │   │
+        │  │ AgentAwareSkills    │   │
+        │  └─────────────────────┘   │
+        └────────────────────────────┘
 ```
 
 ## Development
