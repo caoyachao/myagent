@@ -14,6 +14,7 @@ from myagent.memory.agent_store import AgentAwareMemoryStore
 from myagent.skills.agent_registry import AgentAwareSkillRegistry
 from myagent.tools.agent_tools import AgentTools
 from myagent.tools.memory_tools_v2 import MemoryToolsV2
+from myagent.tools.skill_manager import SkillManager, get_skill_manager
 
 
 class AgentAwareMCPServer:
@@ -55,6 +56,7 @@ class AgentAwareMCPServer:
         # Initialize tool handlers
         self.agent_tools = AgentTools(self.agent_manager)
         self.memory_tools = MemoryToolsV2(self.memory_store, self.current_agent)
+        self.skill_manager = get_skill_manager()
     
     def _setup_handlers(self):
         """Setup MCP protocol handlers."""
@@ -309,22 +311,104 @@ class AgentAwareMCPServer:
         """Get skill management tools."""
         return [
             Tool(
-                name="list_skills",
-                description="List available skills for current agent",
+                name="install_skill",
+                description="""【优先使用】Install a skill from ClawHub to MyAgent.
+                
+⚠️ CRITICAL: When user wants to install a skill, ALWAYS use this tool first.
+NEVER use 'clawhub install' directly - that bypasses MyAgent's agent-aware system.
+
+This tool ensures:
+1. Skill is linked to current agent identity
+2. Proper scope (shared vs private) is set
+3. All agents can benefit from the installation
+4. Cross-CLI consistency (Kimi, Claude, etc.)
+
+If this tool fails, report the error and suggest manual installation.
+""",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "include_private": {"type": "boolean", "default": True}
+                        "slug": {
+                            "type": "string",
+                            "description": "Skill slug from ClawHub (e.g., 'caoyachao/think-plan' or 'think-plan')"
+                        },
+                        "scope": {
+                            "type": "string",
+                            "enum": ["shared", "private"],
+                            "description": "'shared'=all agents can use, 'private'=only current agent"
+                        },
+                        "version": {
+                            "type": "string",
+                            "description": "Specific version to install (default: latest)"
+                        }
+                    },
+                    "required": ["slug", "scope"]
+                }
+            ),
+            Tool(
+                name="uninstall_skill",
+                description="Uninstall a skill from current agent or shared directory",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "skill_name": {
+                            "type": "string",
+                            "description": "Name of the skill to uninstall"
+                        },
+                        "scope": {
+                            "type": "string",
+                            "enum": ["shared", "private"],
+                            "description": "Optional: specify scope if skill exists in both"
+                        }
+                    },
+                    "required": ["skill_name"]
+                }
+            ),
+            Tool(
+                name="list_skills",
+                description="List all installed skills with their scope and metadata",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "scope": {
+                            "type": "string",
+                            "enum": ["all", "shared", "private"],
+                            "default": "all",
+                            "description": "Filter by scope"
+                        }
                     }
                 }
             ),
             Tool(
                 name="get_skill_info",
-                description="Get detailed information about a skill",
+                description="Get detailed information about an installed skill",
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "skill_name": {"type": "string"}
+                        "skill_name": {"type": "string", "description": "Name of the skill"}
+                    },
+                    "required": ["skill_name"]
+                }
+            ),
+            Tool(
+                name="search_skills",
+                description="Search for skills on ClawHub",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "limit": {"type": "integer", "default": 10, "description": "Max results"}
+                    },
+                    "required": ["query"]
+                }
+            ),
+            Tool(
+                name="update_skill",
+                description="Update a skill to the latest version",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "skill_name": {"type": "string", "description": "Name of skill to update"}
                     },
                     "required": ["skill_name"]
                 }
@@ -369,10 +453,18 @@ class AgentAwareMCPServer:
             return self._get_current_info_session()
         
         # Skill management tools
+        elif name == "install_skill":
+            return self._install_skill(**arguments)
+        elif name == "uninstall_skill":
+            return self._uninstall_skill(**arguments)
         elif name == "list_skills":
-            return self._list_skills(**arguments)
+            return self._list_installed_skills(**arguments)
         elif name == "get_skill_info":
-            return self._get_skill_info(**arguments)
+            return self._get_skill_info_detailed(**arguments)
+        elif name == "search_skills":
+            return self._search_skills(**arguments)
+        elif name == "update_skill":
+            return self._update_skill(**arguments)
         elif name == "reload_skills":
             self.skill_registry.reload()
             return "Skills reloaded successfully."
@@ -633,6 +725,148 @@ class AgentAwareMCPServer:
 
 示例：
 【{agent.name}】你好！我是{agent.name}。有什么可以帮你的吗？"""
+    
+    def _install_skill(self, slug: str, scope: str, version: Optional[str] = None) -> str:
+        """Install a skill from ClawHub."""
+        result = self.skill_manager.install_from_clawhub(slug, scope, version)
+        
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            suggestion = result.get("suggestion", "")
+            if suggestion:
+                return f"❌ Installation failed: {error_msg}\n💡 {suggestion}"
+            return f"❌ Installation failed: {error_msg}"
+        
+        # Reload skills to pick up the new one
+        self.skill_registry.reload()
+        
+        lines = [
+            f"✅ Successfully installed '{result['skill_name']}'",
+            f"",
+            f"📦 Source: {result['slug']}",
+            f"🔖 Version: {result['version']}",
+            f"📍 Scope: {result['scope']}",
+            f"📂 Location: {result['install_path']}",
+        ]
+        
+        if result.get("description"):
+            lines.append(f"📝 Description: {result['description'][:100]}")
+        
+        lines.append(f"\n🔄 Skills reloaded. Use list_skills() to see all available skills.")
+        
+        if scope == "shared":
+            lines.append(f"\n💡 This skill is now available to all agents that inherit shared skills.")
+        else:
+            lines.append(f"\n💡 This skill is private to {self.current_agent.name}.")
+        
+        return "\n".join(lines)
+    
+    def _uninstall_skill(self, skill_name: str, scope: Optional[str] = None) -> str:
+        """Uninstall a skill."""
+        result = self.skill_manager.uninstall(skill_name, scope)
+        
+        if not result.get("success"):
+            error_msg = result.get("error", "Unknown error")
+            suggestion = result.get("suggestion", "")
+            if suggestion:
+                return f"❌ Uninstall failed: {error_msg}\n💡 {suggestion}"
+            return f"❌ Uninstall failed: {error_msg}"
+        
+        # Reload skills to remove the uninstalled one
+        self.skill_registry.reload()
+        
+        return f"✅ Successfully uninstalled '{result['skill_name']}' from {result['scope']}\n🔄 Skills reloaded."
+    
+    def _list_installed_skills(self, scope: str = "all") -> str:
+        """List all installed skills with detailed info."""
+        result = self.skill_manager.list_installed(scope)
+        
+        lines = [f"【{result['current_agent']} 的 Skill 列表】\n"]
+        
+        # Shared skills
+        if result.get("shared"):
+            lines.append(f"🌐 共享 Skills ({len(result['shared'])}) - 所有 Agent 可用:")
+            for skill in result["shared"]:
+                lines.append(f"  • {skill['name']} v{skill.get('version', '?')}")
+                if skill.get("description"):
+                    desc = skill['description'][:60]
+                    if len(skill['description']) > 60:
+                        desc += "..."
+                    lines.append(f"    {desc}")
+            lines.append("")
+        
+        # Private skills
+        if result.get("private"):
+            lines.append(f"🔒 私有 Skills ({len(result['private'])}) - 仅当前 Agent:")
+            for skill in result["private"]:
+                lines.append(f"  • {skill['name']} v{skill.get('version', '?')}")
+                if skill.get("description"):
+                    desc = skill['description'][:60]
+                    if len(skill['description']) > 60:
+                        desc += "..."
+                    lines.append(f"    {desc}")
+            lines.append("")
+        
+        if not result.get("shared") and not result.get("private"):
+            lines.append("No installed skills found.")
+            lines.append("\n💡 Use install_skill(slug, scope) to install a skill.")
+        
+        return "\n".join(lines)
+    
+    def _get_skill_info_detailed(self, skill_name: str) -> str:
+        """Get detailed info about an installed skill."""
+        result = self.skill_manager.get_skill_info(skill_name)
+        
+        if not result.get("found"):
+            return f"❌ Skill '{skill_name}' not found.\n\nUse list_skills() to see installed skills."
+        
+        lines = [
+            f"📦 {result['name']}",
+            f"",
+            f"🔖 Version: {result.get('version', 'Unknown')}",
+            f"📍 Scope: {result['scope']}",
+            f"📂 Path: {result['path']}",
+        ]
+        
+        if result.get("author"):
+            lines.append(f"👤 Author: {result['author']}")
+        
+        if result.get("description"):
+            lines.append(f"\n📝 Description:\n{result['description']}")
+        
+        if result.get("full_description"):
+            lines.append(f"\n📄 Full Description:\n{result['full_description']}")
+        
+        return "\n".join(lines)
+    
+    def _search_skills(self, query: str, limit: int = 10) -> str:
+        """Search for skills on ClawHub."""
+        result = self.skill_manager.search_clawhub(query, limit)
+        
+        if not result.get("success"):
+            return f"❌ Search failed: {result.get('error', 'Unknown error')}"
+        
+        lines = [
+            f"🔍 Search results for '{result['query']}':",
+            f"",
+            result.get("results", "No results found."),
+            f"",
+            f"💡 Use install_skill(slug, scope='shared'|'private') to install a skill.",
+        ]
+        
+        return "\n".join(lines)
+    
+    def _update_skill(self, skill_name: str) -> str:
+        """Update a skill to the latest version."""
+        result = self.skill_manager.update_skill(skill_name)
+        
+        if not result.get("success"):
+            return f"❌ Update failed: {result.get('error', 'Unknown error')}"
+        
+        # Reload skills
+        self.skill_registry.reload()
+        
+        return f"✅ Successfully updated '{skill_name}' to latest version\n🔄 Skills reloaded."
     
     def _wrap_with_agent(self, content: str) -> str:
         """Wrap content with agent name prefix."""

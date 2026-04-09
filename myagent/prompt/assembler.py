@@ -24,6 +24,7 @@ class PromptAssembler:
         """
         sections = [
             self._get_base_prompt(),
+            self._get_skill_installation_rules(),
             self._get_user_profile(),
             self._get_relevant_memories(user_context),
             self._get_available_skills(),
@@ -51,6 +52,33 @@ class PromptAssembler:
 - event: 特定事件和经历
 - insight: 洞察和总结
 - code: 代码片段和技术方案"""
+    
+    def _get_skill_installation_rules(self) -> str:
+        """Get strict rules for skill installation."""
+        return """【🔴 强制规则 - Skill 安装】
+
+当用户说"安装 skill"、"装个 skill"或类似表述时，执行顺序必须如下：
+
+1️⃣ 首选（强制）: 使用 install_skill MCP 工具
+   - 询问用户范围: 共享(shared) 或 私有(private)
+   - 调用 install_skill(slug, scope)
+   
+2️⃣ 次选（仅当 MCP 不可用时）: 使用 myagent CLI
+   - myagent skill install <slug> [--shared|--private]
+
+3️⃣ 禁止（除非以上都失败）: 直接使用 clawhub install
+   - 这会绕过 MyAgent 的 Agent 身份系统
+   - 安装的 Skill 无法与当前 Agent 关联
+
+安装完成后，必须：
+- 调用 list_skills() 验证安装成功
+- 告知用户 Skill 的安装位置和可用范围
+
+【为什么优先使用 MyAgent？】
+✓ 与当前 Agent 身份绑定
+✓ 支持共享/私有范围选择  
+✓ 跨 CLI 一致体验（Kimi/Claude 等）
+✓ 统一的 Skill 管理和更新"""
     
     def _get_user_profile(self) -> str:
         """Get user profile from memories."""

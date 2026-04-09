@@ -14,12 +14,13 @@ from myagent.agent.manager import get_agent_manager
 from myagent.agent.models import AgentCreateRequest
 from myagent.memory.agent_store import AgentAwareMemoryStore
 from myagent.agent.cleaner import AgentCleaner
+from myagent.tools.skill_manager import SkillManager, get_skill_manager
 
 console = Console()
 
 
 @click.group()
-@click.version_option(version="2.0.0")
+@click.version_option(version="2.1.0")
 def main():
     """MyAgent 2.0 - Multi-Agent memory-enhanced layer for Kimi Code CLI."""
     pass
@@ -430,6 +431,183 @@ def migrate(status, rollback):
             console.print("[green]Rollback completed.[/]")
     else:
         migration.check_and_migrate()
+
+
+# Skill management commands
+@main.group()
+def skill():
+    """Manage skills (install, uninstall, list, etc.)."""
+    pass
+
+
+@skill.command("install")
+@click.argument("slug")
+@click.option("--scope", "-s", type=click.Choice(["shared", "private"]), 
+              default="shared", help="Installation scope")
+@click.option("--version", "-v", default=None, help="Specific version to install")
+def install_skill(slug, scope, version):
+    """Install a skill from ClawHub."""
+    skill_manager = get_skill_manager()
+    
+    console.print(f"[bold blue]Installing '{slug}'...[/]")
+    
+    with console.status("[bold green]Installing from ClawHub..."):
+        result = skill_manager.install_from_clawhub(slug, scope, version)
+    
+    if not result.get("success"):
+        console.print(f"[bold red]❌ Installation failed:[/] {result.get('error')}")
+        if result.get("suggestion"):
+            console.print(f"[yellow]💡 {result['suggestion']}[/]")
+        return
+    
+    console.print(Panel.fit(
+        f"[bold green]✅ Successfully installed '{result['skill_name']}'[/]\n\n"
+        f"📦 Source: {result['slug']}\n"
+        f"🔖 Version: {result['version']}\n"
+        f"📍 Scope: [cyan]{result['scope']}[/]\n"
+        f"📂 Location: {result['install_path']}",
+        title="Skill Installed",
+        border_style="green"
+    ))
+    
+    if scope == "shared":
+        console.print("[dim]💡 This skill is now available to all agents that inherit shared skills.[/]")
+    else:
+        console.print("[dim]💡 This skill is private to the current agent.[/]")
+
+
+@skill.command("uninstall")
+@click.argument("skill_name")
+@click.option("--scope", "-s", type=click.Choice(["shared", "private"]), 
+              default=None, help="Optional: specify scope if skill exists in both")
+@click.option("--force", is_flag=True, help="Skip confirmation")
+def uninstall_skill(skill_name, scope, force):
+    """Uninstall a skill."""
+    skill_manager = get_skill_manager()
+    
+    # First check where it's installed
+    info = skill_manager.get_skill_info(skill_name)
+    if not info.get("found"):
+        console.print(f"[bold red]❌ Skill '{skill_name}' not found[/]")
+        return
+    
+    if not force:
+        confirm = click.confirm(f"Uninstall '{skill_name}' from {info['scope']}?")
+        if not confirm:
+            console.print("[yellow]Cancelled.[/]")
+            return
+    
+    with console.status("[bold green]Uninstalling..."):
+        result = skill_manager.uninstall(skill_name, scope)
+    
+    if not result.get("success"):
+        console.print(f"[bold red]❌ Uninstall failed:[/] {result.get('error')}")
+        return
+    
+    console.print(f"[bold green]✅ Uninstalled '{skill_name}' from {result['scope']}[/]")
+
+
+@skill.command("list")
+@click.option("--scope", "-s", type=click.Choice(["all", "shared", "private"]), 
+              default="all", help="Filter by scope")
+def list_skills(scope):
+    """List all installed skills."""
+    skill_manager = get_skill_manager()
+    result = skill_manager.list_installed(scope)
+    
+    # Shared skills
+    if result.get("shared"):
+        console.print(f"\n[bold blue]🌐 Shared Skills ({len(result['shared'])})[/]")
+        for skill in result["shared"]:
+            console.print(f"  • [cyan]{skill['name']}[/] v{skill.get('version', '?')}")
+            if skill.get("description"):
+                desc = skill['description'][:50]
+                if len(skill['description']) > 50:
+                    desc += "..."
+                console.print(f"    [dim]{desc}[/]")
+    
+    # Private skills
+    if result.get("private"):
+        console.print(f"\n[bold yellow]🔒 Private Skills ({len(result['private'])}) - {result['current_agent']}[/]")
+        for skill in result["private"]:
+            console.print(f"  • [cyan]{skill['name']}[/] v{skill.get('version', '?')}")
+            if skill.get("description"):
+                desc = skill['description'][:50]
+                if len(skill['description']) > 50:
+                    desc += "..."
+                console.print(f"    [dim]{desc}[/]")
+    
+    if not result.get("shared") and not result.get("private"):
+        console.print("[yellow]No installed skills found.[/]")
+        console.print("[dim]Use 'myagent skill install <slug>' to install a skill.[/]")
+
+
+@skill.command("info")
+@click.argument("skill_name")
+def skill_info(skill_name):
+    """Show detailed information about a skill."""
+    skill_manager = get_skill_manager()
+    result = skill_manager.get_skill_info(skill_name)
+    
+    if not result.get("found"):
+        console.print(f"[bold red]❌ Skill '{skill_name}' not found[/]")
+        return
+    
+    info_text = f"""[bold cyan]📦 {result['name']}[/]
+
+🔖 Version: {result.get('version', 'Unknown')}
+📍 Scope: [cyan]{result['scope']}[/]
+📂 Path: {result['path']}"""
+    
+    if result.get("author"):
+        info_text += f"\n👤 Author: {result['author']}"
+    
+    if result.get("description"):
+        info_text += f"\n\n📝 Description:\n{result['description']}"
+    
+    console.print(Panel.fit(info_text, title="Skill Info", border_style="cyan"))
+
+
+@skill.command("search")
+@click.argument("query")
+@click.option("--limit", "-n", default=10, help="Maximum number of results")
+def search_skills(query, limit):
+    """Search for skills on ClawHub."""
+    skill_manager = get_skill_manager()
+    
+    with console.status(f"[bold green]Searching for '{query}'..."):
+        result = skill_manager.search_clawhub(query, limit)
+    
+    if not result.get("success"):
+        console.print(f"[bold red]❌ Search failed:[/] {result.get('error')}")
+        return
+    
+    console.print(f"\n[bold]🔍 Results for '{query}':[/]\n")
+    console.print(result.get("results", "No results found."))
+
+
+@skill.command("update")
+@click.argument("skill_name")
+def update_skill(skill_name):
+    """Update a skill to the latest version."""
+    skill_manager = get_skill_manager()
+    
+    # Check if skill exists
+    info = skill_manager.get_skill_info(skill_name)
+    if not info.get("found"):
+        console.print(f"[bold red]❌ Skill '{skill_name}' not found[/]")
+        return
+    
+    console.print(f"[bold blue]Updating '{skill_name}'...[/]")
+    
+    with console.status("[bold green]Updating..."):
+        result = skill_manager.update_skill(skill_name)
+    
+    if not result.get("success"):
+        console.print(f"[bold red]❌ Update failed:[/] {result.get('error')}")
+        return
+    
+    console.print(f"[bold green]✅ Updated '{skill_name}' to latest version[/]")
 
 
 # Archive commands
