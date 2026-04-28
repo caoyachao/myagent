@@ -42,12 +42,16 @@ class ArchiveConfig(BaseSettings):
         return v
 
 
+# Resolve .env from myagent package directory instead of CWD
+# to avoid picking up unrelated .env files from the caller's working directory.
+_env_file_path = Path(__file__).parent.parent / ".env"
+
 class Settings(BaseSettings):
     """Application settings."""
     
     model_config = SettingsConfigDict(
         env_prefix="MYAGENT_",
-        env_file=".env",
+        env_file=str(_env_file_path) if _env_file_path.exists() else None,
         env_file_encoding="utf-8",
     )
     
